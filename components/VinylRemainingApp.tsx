@@ -1,6 +1,37 @@
 'use client';
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+type Unit = "in" | "mm";
+type ThemeMode = "light" | "dark" | "auto";
+
+type ThicknessPreset = {
+  name: string;
+  thicknessIn: number;
+};
+
+type SavedRoll = {
+  name: string;
+  unit: Unit;
+  od: number;
+  id: number;
+  thickness: number;
+  savedAt: number;
+  lengthIn: number;
+  lengthFt: number;
+  lengthM: number;
+  lengthYd: number;
+};
+
+type CalcResult =
+  | { valid: false; message: string }
+  | {
+      valid: true;
+      lengthIn: number;
+      lengthFt: number;
+      lengthYd: number;
+      lengthM: number;
+    };
+
 /**
  * Vinyl Remaining Web App — Single-file React component
  * Design goals: Apple-like minimalism, calm visual hierarchy, soft glass cards,
@@ -26,21 +57,33 @@ function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
+const DEFAULT_PRESETS: ThicknessPreset[] = [
+  { name: "Calendared 3 mil", thicknessIn: 0.003 },
+  { name: "Cast 2 mil", thicknessIn: 0.002 },
+  { name: "Laminate 1.5 mil", thicknessIn: 0.0015 },
+  { name: "100 μm film", thicknessIn: 0.1 * IN_PER_MM },
+];
+
+const THEME_MODES: ThemeMode[] = ["light", "auto", "dark"];
+
 // --- Local storage helpers --------------------------------------------------
 const store = {
   get<T>(key: string, fallback: T): T {
+    if (typeof window === "undefined") return fallback;
     try {
-      // @ts-ignore
-      const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) as T : fallback;
+      const raw = window.localStorage.getItem(key);
+      return raw ? (JSON.parse(raw) as T) : fallback;
     } catch {
       return fallback;
     }
   },
-  set(key: string, value: unknown) {
+  set<T>(key: string, value: T) {
+    if (typeof window === "undefined") return;
     try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {}
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // ignore write failures (private mode, etc.)
+    }
   },
 };
 
@@ -87,7 +130,7 @@ function BrandMark({ logoUrl, isDark }: { logoUrl: string | null; isDark: boolea
 }
 
 // --- CSV helper -------------------------------------------------------------
-function toCSV(rows: any[]) {
+function toCSV(rows: SavedRoll[]) {
   const header = ["Saved At", "Name", "Unit", "OD", "ID", "Thickness", "Length_in", "Length_ft", "Length_m", "Length_yd"]; // prettier-ignore
   const data = rows.map((r) => [
     new Date(r.savedAt).toISOString(),
@@ -109,31 +152,26 @@ function toCSV(rows: any[]) {
 
 // --- Main App ---------------------------------------------------------------
 export default function VinylRemainingApp() {
-  const [unit, setUnit] = useState(() => store.get("vinylCalc.unit", "in")); // "in" | "mm"
-  const [theme, setTheme] = useState<"light" | "dark" | "auto">(() => store.get("vinylCalc.theme", "auto")); // "light" | "dark" | "auto"
+  const [unit, setUnit] = useState<Unit>(() => store.get<Unit>("vinylCalc.unit", "in"));
+  const [theme, setTheme] = useState<ThemeMode>(() => store.get<ThemeMode>("vinylCalc.theme", "auto"));
 
   // Inputs in CURRENT unit
-  const [od, setOd] = useState<number>(() => store.get("vinylCalc.od", 6));
+  const [od, setOd] = useState<number>(() => store.get<number>("vinylCalc.od", 6));
   const [id, setId] = useState<number>(() => {
-    const saved = store.get("vinylCalc.id", null as any);
+    const saved = store.get<number | null>("vinylCalc.id", null);
     if (saved !== null && saved !== undefined) return saved;
     return unit === "mm" ? 85 : round(85 * IN_PER_MM, 3);
   });
-  const [thickness, setThickness] = useState<number>(() => store.get("vinylCalc.thickness", unit === "mm" ? 0.076 : 0.003));
+  const [thickness, setThickness] = useState<number>(() => store.get<number>("vinylCalc.thickness", unit === "mm" ? 0.076 : 0.003));
 
   const [showPresetModal, setShowPresetModal] = useState(false);
-  const [presets, setPresets] = useState(() => store.get("vinylCalc.presets", [
-    { name: "Calendared 3 mil", thicknessIn: 0.003 },
-    { name: "Cast 2 mil", thicknessIn: 0.002 },
-    { name: "Laminate 1.5 mil", thicknessIn: 0.0015 },
-    { name: "100 μm film", thicknessIn: 0.1 * IN_PER_MM },
-  ]));
+  const [presets, setPresets] = useState<ThicknessPreset[]>(() => store.get<ThicknessPreset[]>("vinylCalc.presets", DEFAULT_PRESETS));
 
-  const [savedRolls, setSavedRolls] = useState<any[]>(() => store.get("vinylCalc.savedRolls", []));
+  const [savedRolls, setSavedRolls] = useState<SavedRoll[]>(() => store.get<SavedRoll[]>("vinylCalc.savedRolls", []));
   const [search, setSearch] = useState("");
   const nameRef = useRef<HTMLInputElement | null>(null);
   // Brand logo URL (data URL or https). Stored in localStorage so you can swap later easily.
-  const [logoUrl, setLogoUrl] = useState<string | null>(() => store.get("vinylCalc.logoUrl", null));
+  const [logoUrl, setLogoUrl] = useState<string | null>(() => store.get<string | null>("vinylCalc.logoUrl", null));
 
   // Persist on change
   useEffect(() => store.set("vinylCalc.unit", unit), [unit]);
@@ -167,7 +205,7 @@ export default function VinylRemainingApp() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable)) return;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
       if (e.key === "/") {
         e.preventDefault();
         const el = document.getElementById("search-input") as HTMLInputElement | null;
@@ -185,7 +223,7 @@ export default function VinylRemainingApp() {
   }, []);
 
   // Convert on unit switch
-  const toggleUnit = (nextUnit: "in" | "mm") => {
+  const toggleUnit = (nextUnit: Unit) => {
     if (nextUnit === unit) return;
     if (nextUnit === "mm") {
       setOd(round(toMM(od, "in"), 3));
@@ -200,23 +238,24 @@ export default function VinylRemainingApp() {
   };
 
   // Calculation (always in inches internally)
-  const calc = useMemo(() => {
+  const calc = useMemo<CalcResult>(() => {
     const odIn = toInches(od, unit);
     const idIn = toInches(id, unit);
     const tIn = toInches(thickness, unit);
 
-    const valid = odIn > idIn && tIn > 0;
-    if (!valid) return { valid, message: "Check that OD > ID and thickness > 0" };
+    if (!(odIn > idIn) || !(tIn > 0)) {
+      return { valid: false, message: "Check that OD > ID and thickness > 0" };
+    }
 
     const lengthIn = (Math.PI * (odIn * odIn - idIn * idIn)) / (4 * tIn);
     const lengthFt = lengthIn / 12;
     const lengthYd = lengthIn / 36;
     const lengthM = lengthIn * 0.0254;
 
-    return { valid, lengthIn, lengthFt, lengthYd, lengthM };
+    return { valid: true, lengthIn, lengthFt, lengthYd, lengthM };
   }, [od, id, thickness, unit]);
 
-  const applyPreset = (p: { name: string; thicknessIn: number; }) => {
+  const applyPreset = (p: ThicknessPreset) => {
     const t = p.thicknessIn;
     setThickness(round(unit === "mm" ? t * MM_PER_IN : t, unit === "mm" ? 3 : 5));
     setShowPresetModal(false);
@@ -225,29 +264,33 @@ export default function VinylRemainingApp() {
   const addPreset = (name: string, tValue: number) => {
     const tIn = toInches(Number(tValue), unit);
     if (!tIn || tIn <= 0) return;
-    setPresets((prev: any[]) => [{ name: name || `${fmt(unit === "mm" ? tIn * 25.4 : tIn, 3)} ${unit}` , thicknessIn: tIn }, ...prev]);
+    setPresets((prev) => [
+      { name: name || `${fmt(unit === "mm" ? tIn * 25.4 : tIn, 3)} ${unit}`, thicknessIn: tIn },
+      ...prev,
+    ]);
   };
 
-  const removePreset = (idx: number) => setPresets((prev: any[]) => prev.filter((_: any, i: number) => i !== idx));
+  const removePreset = (idx: number) => setPresets((prev) => prev.filter((_, i) => i !== idx));
 
   const saveRoll = (name?: string) => {
     if (!calc.valid) return;
-    const entry = {
-      name: name || `Roll ${savedRolls.length + 1}`,
+    const { lengthIn, lengthFt, lengthM, lengthYd } = calc;
+    const entry: SavedRoll = {
+      name: name?.trim() || `Roll ${savedRolls.length + 1}`,
       unit,
       od: round(od, 3),
       id: round(id, 3),
       thickness: round(thickness, 5),
       savedAt: Date.now(),
-      lengthIn: round((calc as any).lengthIn, 2),
-      lengthFt: round((calc as any).lengthFt, 2),
-      lengthM: round((calc as any).lengthM, 2),
-      lengthYd: round((calc as any).lengthYd, 2),
+      lengthIn: round(lengthIn, 2),
+      lengthFt: round(lengthFt, 2),
+      lengthM: round(lengthM, 2),
+      lengthYd: round(lengthYd, 2),
     };
-    setSavedRolls((prev: any[]) => [entry, ...prev]);
+    setSavedRolls((prev) => [entry, ...prev]);
   };
 
-  const filtered = useMemo(() => {
+  const filtered = useMemo<SavedRoll[]>(() => {
     const q = search.trim().toLowerCase();
     if (!q) return savedRolls;
     return savedRolls.filter((r) =>
@@ -311,12 +354,12 @@ export default function VinylRemainingApp() {
 
             {/* Theme menu */}
             <div className={cx("inline-flex rounded-2xl overflow-hidden border backdrop-blur", isDark ? "border-white/10 bg-white/5" : "border-black/10 bg-white shadow-md")} >
-              {["light", "auto", "dark"].map((m) => (
+              {THEME_MODES.map((m) => (
                 <button
                   key={m}
                   title={`Theme: ${m}`}
                   className={cx("px-3 md:px-4 py-2 text-sm capitalize", theme === m ? "bg-black text-white" : "hover:bg-black/5 dark:hover:bg-white/10")}
-                  onClick={() => setTheme(m as any)}
+                  onClick={() => setTheme(m)}
                 >
                   {m}
                 </button>
@@ -402,9 +445,9 @@ export default function VinylRemainingApp() {
             </div>
 
             {/* Validation */}
-            {(!calc.valid) && (
+            {!calc.valid && (
               <div className="mt-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-200 border border-red-200/60 dark:border-red-800/50">
-                {"" + (calc as any).message}
+                {calc.message}
               </div>
             )}
           </section>
@@ -415,19 +458,19 @@ export default function VinylRemainingApp() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className={cx("rounded-2xl p-4 border", isDark ? "border-white/10 bg-white/5" : "border-black/10 bg-white/80")}>
                 <div className="text-sm text-neutral-500">Feet</div>
-                <div className="text-2xl font-semibold">{fmt((calc as any).valid ? (calc as any).lengthFt : 0, 2)} ft</div>
+                <div className="text-2xl font-semibold">{fmt(calc.valid ? calc.lengthFt : 0, 2)} ft</div>
               </div>
               <div className={cx("rounded-2xl p-4 border", isDark ? "border-white/10 bg-white/5" : "border-black/10 bg-white/80")}>
                 <div className="text-sm text-neutral-500">Meters</div>
-                <div className="text-2xl font-semibold">{fmt((calc as any).valid ? (calc as any).lengthM : 0, 2)} m</div>
+                <div className="text-2xl font-semibold">{fmt(calc.valid ? calc.lengthM : 0, 2)} m</div>
               </div>
               <div className={cx("rounded-2xl p-4 border", isDark ? "border-white/10 bg-white/5" : "border-black/10 bg-white/80")}>
                 <div className="text-sm text-neutral-500">Inches</div>
-                <div className="text-2xl font-semibold">{fmt((calc as any).valid ? (calc as any).lengthIn : 0, 0)} in</div>
+                <div className="text-2xl font-semibold">{fmt(calc.valid ? calc.lengthIn : 0, 0)} in</div>
               </div>
               <div className={cx("rounded-2xl p-4 border", isDark ? "border-white/10 bg-white/5" : "border-black/10 bg-white/80")}>
                 <div className="text-sm text-neutral-500">Yards</div>
-                <div className="text-2xl font-semibold">{fmt((calc as any).valid ? (calc as any).lengthYd : 0, 2)} yd</div>
+                <div className="text-2xl font-semibold">{fmt(calc.valid ? calc.lengthYd : 0, 2)} yd</div>
               </div>
             </div>
           </section>
@@ -448,7 +491,10 @@ export default function VinylRemainingApp() {
                 />
               </div>
               <button
-                className={cx("px-3 py-2 text-sm rounded-2xl border", isDark ? "border-white/10 bg-white/5 hover:bg-white/10" : "border-black/10 bg-white hover:bg_WHITE shadow-md".replace("bg_WHITE","bg-white"))}
+                className={cx(
+                  "px-3 py-2 text-sm rounded-2xl border",
+                  isDark ? "border-white/10 bg-white/5 hover:bg-white/10" : "border-black/10 bg-white hover:bg-white shadow-md"
+                )}
                 onClick={exportCSV}
               >
                 Export CSV
@@ -510,11 +556,14 @@ export default function VinylRemainingApp() {
                       <td className="py-2 pr-3">
                         <div className="flex gap-2">
                           <button
-                            className={cx("px-3 py-1.5 rounded-xl", isDark ? "bg_WHITE".replace("bg_WHITE","bg-white/10 hover:bg-white/15") : "bg-black/5 hover:bg-black/10 shadow-sm")}
+                            className={cx(
+                              "px-3 py-1.5 rounded-xl",
+                              isDark ? "bg-white/10 hover:bg-white/15" : "bg-black/5 hover:bg-black/10 shadow-sm"
+                            )}
                             title="Load"
                             onClick={() => {
                               // load respecting r.unit
-                              if (unit !== r.unit) toggleUnit(r.unit as any);
+                              if (unit !== r.unit) toggleUnit(r.unit);
                               setOd(r.od);
                               setId(r.id);
                               setThickness(r.thickness);
@@ -526,8 +575,7 @@ export default function VinylRemainingApp() {
                             className={cx("px-3 py-1.5 rounded-xl text-red-600", isDark ? "bg-red-500/10 hover:bg-red-500/20" : "bg-red-500/10 hover:bg-red-500/20 shadow-sm")}
                             title="Delete"
                             onClick={() => {
-                              const idx = savedRolls.findIndex((sr) => sr.savedAt === r.savedAt);
-                              if (idx >= 0) setSavedRolls(savedRolls.filter((_, i2) => i2 !== idx));
+                              setSavedRolls((prev) => prev.filter((sr) => sr.savedAt !== r.savedAt));
                             }}
                           >
                             Delete
@@ -564,7 +612,7 @@ export default function VinylRemainingApp() {
   );
 }
 
-function PresetManager({ unit, presets, onApply, onAdd, onRemove, isDark }: { unit: string; presets: any[]; onApply: (p:any)=>void; onAdd: (name:string, val:number)=>void; onRemove:(idx:number)=>void; isDark: boolean; }) {
+function PresetManager({ unit, presets, onApply, onAdd, onRemove, isDark }: { unit: Unit; presets: ThicknessPreset[]; onApply: (p: ThicknessPreset) => void; onAdd: (name: string, val: number) => void; onRemove: (idx: number) => void; isDark: boolean; }) {
   const [name, setName] = useState("");
   const [t, setT] = useState("");
 
